@@ -9,3 +9,4 @@ decompyle3
 pyarmor
 pefile
 pyzipper
+pandas
