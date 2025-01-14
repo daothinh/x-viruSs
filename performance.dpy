@@ -1,0 +1,3 @@
+from utils.file_md5hasher import FileHasher
+
+pass

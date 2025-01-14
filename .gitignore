@@ -1,0 +1,10 @@
+# Environment
+env/*
+.vscode/*
+
+# Download folder
+downloads/*
+
+# Config
+.env
+*.csv

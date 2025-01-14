@@ -1,0 +1,15 @@
+# Hybrid Sandbox
+- query hash
+- search file type 
+- download sample
+
+
+# Virusshare
+- check file exists
+- download file
+- get report
+- get sample sourced from
+
+# VirusTotal
+- Case 1: Nhận đường dẫn -> query toàn bộ file, lấy điểm số ratio VirusTotal -> lưu kết quả ra file với định dạng MD5, path/to/file
+
