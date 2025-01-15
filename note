@@ -11,5 +11,10 @@
 - get sample sourced from
 
 # VirusTotal
-- Case 1: Nhận đường dẫn -> query toàn bộ file, lấy điểm số ratio VirusTotal -> lưu kết quả ra file với định dạng MD5, path/to/file
+- Case 1: Nhận đường dẫn -> query toàn bộ file, lấy điểm số ratio VirusTotal 
+-> lưu kết quả ra file với định dạng Ratio, MD5, path/to/file
 
+
+
+- Case 2: Nhận vào list hash -> query toàn bộ hash
+- 

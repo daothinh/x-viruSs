@@ -1,9 +1,12 @@
 # Environment
 env/*
 .vscode/*
+apis/__pycache__/*
+utils/__pycache__/*
 
 # Download folder
 downloads/*
+data/*
 
 # Config
 .env

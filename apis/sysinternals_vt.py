@@ -3,23 +3,27 @@ import os
 import time
 import random
 import string
-import secrets
+import pandas as pd
 import requests
+import csv
+
+
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from utils.md5_hash import hash_files_in_folder, load_hashes_and_paths_from_file
 
 load_dotenv()
-base = os.path.dirname(os.path.abspath(__file__))
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
+REPORT_FILE = os.path.join(BASE_DIR, "data", "report_query.csv")
+
 HASH_DB = os.getenv("HASH_DB")
-REPORT_FILE = os.getenv("REPORT_FILE")
 VT_BASE_URL = os.getenv("URL_SYSINTERNAL_QUERY")
 VT_KEYS = os.getenv("SYSINTERNAL_API_KEY")
-
-
+FOLDER_PATH = os.getenv("FOLDER_TARGET_HASH")
 TIME_DELAY = 2
-BATCH_SIZE = 100
+LIMIT_SIZE_QUERY = 100
 
 
 # def random_vt_keys(keys):
@@ -37,41 +41,63 @@ def random_date(start, end):
     random_second = random.randrange(int_delta)
     return start + timedelta(seconds=random_second)
 
-'''
+
+"""
 Content in path
 
 ratio, path/to/file
-0.0, 1234567890abcdef
-0.0, 1234567890abcdef
-0.0, 1234567890abcdef
-'''
-def load_exist_hashes(path):
+1/10, 1234567890aecdef
+3/10, 1234567890afcdef
+4/11, 1234567890abcdef
+"""
+
+
+# def load_exist_hashes(path):
+#     try:
+#         exist_hashes = []
+#         with open(path) as file:
+#             lines = [line.rstrip() for line in file]
+#         for it in lines:
+#             exist_hashes.append(it.split(",")[1])
+#     except Exception as ex:
+#         print(ex)
+#     else:
+#         return list(set(exist_hashes))
+
+def load_exist_hashes(report_path):
     try:
-        exist_hashes = []
-        with open(path) as file:
-            lines = [line.rstrip() for line in file]
-        for it in lines:
-            exist_hashes.append(it.split(",")[-1])
-    except Exception as ex:
-        print(ex)
-    else:
-        return list(set(exist_hashes))
+        df = pd.read_csv(report_path)
+        return set(df['hash'])  # Chỉ lấy phần hash để so sánh
+    except Exception as e:
+        print(f"Error loading existing hashes: {e}")
+        return set()
 
 
-def load_new_hashes(path):
+# def load_new_hashes(path):
+#     try:
+#         with open(path) as file:
+#             lines = [line.rstrip() for line in file]
+#     except Exception as ex:
+#         print(ex)
+#     else:
+#         return list(set(lines))
+
+
+def save_vt_detection(report_path, str_hash, detection_ratio, file_path):
     try:
-        with open(path) as file:
-            lines = [line.rstrip() for line in file]
-    except Exception as ex:
-        print(ex)
-    else:
-        return list(set(lines))
-
-
-def save_vt_detection(file_path, str_hash, detection_ratio):
-    try:
-        with open(file=file_path, mode="a+", encoding="utf-8") as fs:
-            fs.write(f"{detection_ratio},{str_hash}\n")
+        # Kiểm tra xem file có tồn tại không để quyết định việc viết tiêu đề
+        file_exists = os.path.isfile(report_path)
+        
+        with open(file=report_path, mode='a', newline='', encoding="utf-8") as fs:
+            writer = csv.writer(fs)
+            
+            # Nếu file không tồn tại, ghi tiêu đề
+            if not file_exists:
+                writer.writerow(["ratio", "hash", "path/to/file"])
+            
+            # Ghi dữ liệu mới vào file
+            writer.writerow([detection_ratio, str_hash, file_path])
+    
     except Exception as ex:
         print(ex)
 
@@ -109,38 +135,45 @@ def search_virustotal(batch_hash):
     return None
 
 
-def search_virustotal_batch(hash_db):
+def search_virustotal_batch(hash_db, report_file=REPORT_FILE):
     try:
-        for i in range(0, len(hash_db), BATCH_SIZE):
-            batch_hash = hash_db[i : i + BATCH_SIZE]
-            response_data = search_virustotal(batch_hash)
+        for i in range(0, len(hash_db), LIMIT_SIZE_QUERY):
+            batch_hash = hash_db[i : (i + LIMIT_SIZE_QUERY)]
+            # Giả sử hash_db là danh sách của các tuple (hash, file_path)
+            batch_hashes = [item[0] for item in batch_hash]
+            response_data = search_virustotal(batch_hashes)
             if response_data is None:
                 print(f"Error - Response data in batch hashes is None")
-                print(batch_hash)
+                # print(batch_hashes)
                 continue
             time.sleep(TIME_DELAY)
-            for item in response_data["data"]:
+            for item, original_data in zip(response_data["data"], batch_hash):
                 try:
-                    str_hash = item["hash"]
+                    str_hash, file_path = original_data  # Giải nén tuple
                     detection_ratio = "unknown"
-                    file_path = os.path.join(BASE_DIR, REPORT_FILE)
                     if item["found"] is True:
                         detection_ratio = item["detection_ratio"]
-                    save_vt_detection(file_path, str_hash, detection_ratio)
+                    save_vt_detection(report_file, str_hash, detection_ratio, file_path)
+                    # Định dạng sau khi lưu kết quả: [ratio], [hash], [path/to/file]
                 except Exception as ex:
                     print(ex)
     except Exception as ex:
         print(ex)
 
 
-def main():
-    path_file = os.path.join(BASE_DIR, HASH_DB)
-    report_file = os.path.join(BASE_DIR, REPORT_FILE)
-    hash_db = load_new_hashes(path_file)
-    report_db = load_exist_hashes(report_file)
-    new_db = list(set(hash_db) - set(report_db))
-    search_virustotal_batch(new_db)
+def sysinternal_vt(input_source):
+    if os.path.isdir(input_source):
+        hash_db = hash_files_in_folder(input_source, None)
+    elif os.path.isfile(input_source):
+        hash_db = load_hashes_and_paths_from_file(input_source)
+    else:
+        print("Invalid input source")
+        return
+    
+    report_db = load_exist_hashes(REPORT_FILE)
+    new_db = [(hash, path) for hash, path in hash_db if hash not in report_db]
 
-
-if __name__ == "__main__":
-    main()
+    if new_db:
+        search_virustotal_batch(new_db)
+    else:
+        print("No new hashes to query")
