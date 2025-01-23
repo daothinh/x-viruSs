@@ -1,6 +1,4 @@
 # Hybrid Sandbox
-- query hash
-- search file type 
 - download sample
 
 
@@ -10,11 +8,9 @@
 - get report
 - get sample sourced from
 
-# VirusTotal
-- Case 1: Nhận đường dẫn -> query toàn bộ file, lấy điểm số ratio VirusTotal 
--> lưu kết quả ra file với định dạng Ratio, MD5, path/to/file
+# Query VirusTotal via Sysinternals
+- Sử dụng Tuple để quản lý và lưu thông tin input
+- Output được lưu trong file CSV
 
-
-
-- Case 2: Nhận vào list hash -> query toàn bộ hash
-- 
+Case 1: Nếu input là folder -> tự động lấy hash, path lưu vào touple
+Case 2: Nếu input là file chứa list hash -> tự động đọc file để lấy hash -> lưu vào dict phục vụ query

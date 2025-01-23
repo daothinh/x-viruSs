@@ -7,6 +7,8 @@ utils/__pycache__/*
 # Download folder
 downloads/*
 data/*
+samples/*
+test/*
 
 # Config
 .env

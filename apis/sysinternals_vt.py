@@ -26,10 +26,6 @@ TIME_DELAY = 2
 LIMIT_SIZE_QUERY = 100
 
 
-# def random_vt_keys(keys):
-#     return secrets.choice(keys)
-
-
 def random_string(length):
     letters = string.ascii_lowercase + string.digits
     return "".join(random.choice(letters) for i in range(length))
@@ -42,62 +38,30 @@ def random_date(start, end):
     return start + timedelta(seconds=random_second)
 
 
-"""
-Content in path
-
-ratio, path/to/file
-1/10, 1234567890aecdef
-3/10, 1234567890afcdef
-4/11, 1234567890abcdef
-"""
-
-
-# def load_exist_hashes(path):
-#     try:
-#         exist_hashes = []
-#         with open(path) as file:
-#             lines = [line.rstrip() for line in file]
-#         for it in lines:
-#             exist_hashes.append(it.split(",")[1])
-#     except Exception as ex:
-#         print(ex)
-#     else:
-#         return list(set(exist_hashes))
-
 def load_exist_hashes(report_path):
     try:
         df = pd.read_csv(report_path)
-        return set(df['hash'])  # Chỉ lấy phần hash để so sánh
+        return set(df["hash"])  # Chỉ lấy phần hash để so sánh
     except Exception as e:
         print(f"Error loading existing hashes: {e}")
         return set()
-
-
-# def load_new_hashes(path):
-#     try:
-#         with open(path) as file:
-#             lines = [line.rstrip() for line in file]
-#     except Exception as ex:
-#         print(ex)
-#     else:
-#         return list(set(lines))
 
 
 def save_vt_detection(report_path, str_hash, detection_ratio, file_path):
     try:
         # Kiểm tra xem file có tồn tại không để quyết định việc viết tiêu đề
         file_exists = os.path.isfile(report_path)
-        
-        with open(file=report_path, mode='a', newline='', encoding="utf-8") as fs:
+
+        with open(file=report_path, mode="a", newline="", encoding="utf-8") as fs:
             writer = csv.writer(fs)
-            
+
             # Nếu file không tồn tại, ghi tiêu đề
             if not file_exists:
                 writer.writerow(["ratio", "hash", "path/to/file"])
-            
+
             # Ghi dữ liệu mới vào file
             writer.writerow([detection_ratio, str_hash, file_path])
-    
+
     except Exception as ex:
         print(ex)
 
@@ -139,7 +103,7 @@ def search_virustotal_batch(hash_db, report_file=REPORT_FILE):
     try:
         for i in range(0, len(hash_db), LIMIT_SIZE_QUERY):
             batch_hash = hash_db[i : (i + LIMIT_SIZE_QUERY)]
-            # Giả sử hash_db là danh sách của các tuple (hash, file_path)
+            # hash_db là danh sách của các tuple (hash, file_path)
             batch_hashes = [item[0] for item in batch_hash]
             response_data = search_virustotal(batch_hashes)
             if response_data is None:
@@ -169,7 +133,7 @@ def sysinternal_vt(input_source):
     else:
         print("Invalid input source")
         return
-    
+
     report_db = load_exist_hashes(REPORT_FILE)
     new_db = [(hash, path) for hash, path in hash_db if hash not in report_db]
 

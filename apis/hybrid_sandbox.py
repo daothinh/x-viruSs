@@ -1,161 +1,98 @@
-#!/usr/bin/env python
-import sys, os, requests, optparse, datetime, json, time, random
+import os, requests, json, time, csv
+from dotenv import load_dotenv
 
-api_key = "<YOUR API KEY>"
+load_dotenv()
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# configd
+api_key = os.getenv("HYBRID_ANALYSIS_API")
+directory = os.path.join(BASE_DIR, "samples")
 throttle = 20
+api_limit = 200
+verbose = True
 
 api_base_url = "https://www.hybrid-analysis.com/api/v2/"
 user_agent = "Falcon Sandbox"
-terms_url = "search/terms"
-feeds_url = "feed/latest"
 download_url = "overview/"
-
-def setup_args():
-
-    parser = optparse.OptionParser()
-
-    parser.add_option('-q', '--query',
-    action="store", dest="query",
-    help="The type of search - feed, terms, hash", default="terms")
-
-    parser.add_option('-f', '--filetype',
-    action="store", dest="filetype",
-    help="File type to search for - see HA docs for full list", default="doc") 
-
-    parser.add_option('-d', '--directory',
-    action="store", dest="directory",
-    help="Location to save the downloaded samples", default="samples")
-
-    parser.add_option('-l', '--limit',
-    action="store", dest="limit",
-    help="Limit number of results to download", default=200)
-
-    parser.add_option('-p', '--parameters',
-    action="store", dest="parameters",
-    help="Search filters as defined by API docs, in the form of 'key:value,key:value'", default="") 
-
-    parser.add_option('-s', '--shuffle',
-    action="store", dest="shuffle",
-    help="Shuffle the list of returned results before downloading - values are y or n", default="n")
-
-    parser.add_option('-v', '--verbose',
-    action="store", dest="verbose",
-    help="Print results of key aspects of the script, such as total results found, number downloaded, et cetera", default="n") 
-
-    return parser.parse_args()
+search_url = "search/hashes"
 
 
-def download_sample(download_url, headers, save_directory, sample_sha256):
-    download = requests.get(download_url, headers = headers)
+def read_csv(file_path):
+    hashes = []
+    with open(file_path, "r") as csvfile:
+        csv_reader = csv.reader(csvfile)
+        next(csv_reader)  # Skip header
+        for row in csv_reader:
+            hashes.append({"hash": row[0], "name": row[1] if len(row) > 1 else None})
+    return hashes
+
+
+def download_sample(download_url, headers, save_directory, sample_hash, filename=None):
+    download = requests.get(download_url, headers=headers)
+    download.raise_for_status()
 
     if not os.path.exists(save_directory):
         os.makedirs(save_directory)
 
-    with open(save_directory + "/" + sample_sha256 + ".gz", "wb") as file:
+    file_name = filename if filename else sample_hash
+    temp_path = os.path.join(save_directory, file_name + ".gz")
+    final_path = os.path.join(save_directory, sample_hash + ".gz")
+
+    with open(save_directory + "/" + sample_hash + ".gz", "wb") as file:
         file.write(download.content)
+    if temp_path != final_path:
+        os.rename(temp_path, final_path)
 
-def main(argv):
 
-    options = setup_args() 
-    parameters = {}
+def hybrid_sandbox(input_source):
     headers = {
-        "accept":"application/json",
-        "Content-Type":"application/x-www-form-urlencoded",
-        "User-Agent":user_agent,
-        "api-key": api_key
+        "accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": user_agent,
+        "api-key": api_key,
     }
-
-    if options.parameters:
-        filters = options.parameters.split(",")
-        for filter in filters:
-            key,value = filter.split(":")
-            parameters[key] = value
 
     download_count = 0
 
-    if options.query == "terms":
+    if os.path.isfile(input_source):
+        hashes = read_csv(input_source)
+        hash_list = [item["hash"] for item in hashes]
+    else:
+        hash_list = [input_source]
+        hashes = [{"hash": input_source, "name": None}]
 
-        headers["accept"] = "application/json"
+    for i in range(0, len(hash_list), api_limit):
+        batch = hash_list[i : i + api_limit]
+        parameters = {
+            f"hashes[{i}]": hash for i, hash in enumerate(batch)
+        }
 
-        parameters["filetype"] = options.filetype 
-        parameters["date_to"] = '{0:%Y-%m-%d %H:%M}'.format(datetime.datetime.now())
-
-        resp = requests.post(api_base_url + terms_url, data = parameters, headers = headers)
-
-        results = json.loads(resp.text)
-
-        if options.verbose == "y":
-            print("[*] Found " + str(results["count"]) + " results")
-
-        results = results["result"]
-
-        if options.shuffle == "y":
-            random.shuffle(results)
-
-        for result in results:
-
-            headers["Content-Type"] = "application/gzip"
-
-            if result["verdict"] == "malicious" or result["verdict"] == "suspicious":
-                if options.verbose == "y":
-                    print("[*] Downloading sample - " + str(result["sha256"]))
-
-                download_sample(api_base_url + download_url + result["sha256"] + "/sample", 
-                headers, 
-                options.directory,
-                result["sha256"])
-
-                download_count = download_count + 1
-
-                time.sleep(throttle)
-
-            if download_count >= int(options.limit):
-                if options.verbose == "y":
-                    print("[!] Download limit reached")
-                break
-
-    elif options.query == "feed":
-
-        headers["accept"] = "application/json"
-
-        resp = requests.get(api_base_url + feeds_url, headers = headers)
-
-        results = json.loads(resp.text)
-
-        if options.verbose == "y":
-            print("[*] Found " + str(results["count"]) + " results")
-
-        results = results["data"]
-        
-        if options.shuffle == "y":
-            random.shuffle(results)
+        resp = requests.post(
+            api_base_url + search_url, data=parameters, headers=headers
+        )
+        resp.raise_for_status()
+        results = json.loads(resp.text)["result"]
 
         for result in results:
-
-            headers["Content-Type"] = "application/gzip"
-
-            if result["interesting"] == True and result["url_analysis"] == False and result["shared_analysis"] == True:
-
-                if options.verbose == "y":
-                    print("[*] Downloading sample - " + str(result["sha256"]))
-
-                download_sample(api_base_url + download_url + result["sha256"] + "/sample", 
-                headers,
-                options.directory,
-                result["sha256"])
-
-                download_count = download_count + 1
-
+            if result["verdict"] in ["malicious", "suspicious"]:
+                hash_entry = next(
+                    (h for h in hashes if h["hash"] == result["md5"]), None
+                )
+                filename = hash_entry["name"] if hash_entry else None
+                if verbose:
+                    print(f"[*] Downloading sample - {result['md5']}")
+                download_sample(
+                    api_base_url + download_url + result["md5"] + "/sample",
+                    headers,
+                    directory,
+                    result["md5"],
+                    filename,
+                )
+                download_count += 1
                 time.sleep(throttle)
-
-            if download_count >= int(options.limit):
-                if options.verbose == "y":
+            if download_count >= api_limit:  # Giới hạn tải xuống theo API
+                if verbose:
                     print("[!] Download limit reached")
                 break
-
-    if options.verbose == "y":
-        print("[*] Downloaded " + str(download_count) + " samples")
-
-if __name__ == '__main__':
-	main(sys.argv[1:])
+    print(f"[*] Downloaded {download_count} samples")
