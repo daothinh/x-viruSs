@@ -9,10 +9,6 @@ __version__ = "1.0"
 __description__ = "x-vriuSs: A tool for analyzing the performance of a file system"
 
 
-def query_virustotal(input):
-    print(f"Querying VirusTotal for {input}")
-
-
 def setup_args():
     parser = argparse.ArgumentParser(
         add_help=False,
@@ -30,26 +26,26 @@ def setup_args():
         # default='terms'
     )
 
-    parser.add_argument(
-        "-pecheck",
-        action="store",
-        dest="file",
-        help="show file version, timestamp, and digital signature details",
-    )
+    # parser.add_argument(
+    #     "-pecheck",
+    #     action="store",
+    #     dest="file",
+    #     help="show file version, timestamp, and digital signature details",
+    # )
 
-    parser.add_argument(
-        "-hybrid",
-        action="store",
-        dest="hash",
-        nargs="+",
-        help="download sample malicious file from Hybrid Analysis",
-    )
+    # parser.add_argument(
+    #     "-hybrid",
+    #     action="store",
+    #     dest="hash",
+    #     nargs="+",
+    #     help="download sample malicious file from Hybrid Analysis",
+    # )
 
     parser.add_argument(
         "-v", "--version", action="version", version=f"%(prog)s {__version__}"
     )
 
-    # Thêm tùy chọn giúp đỡ vào cuối danh sách
+    # Add help message
     parser.add_argument(
         "-h",
         "--help",
@@ -63,15 +59,18 @@ def setup_args():
 def main():
     optParser = setup_args()
     args = optParser.parse_args()
-    print(args)
-    if not (args.path or args.file):
+    # print(args.hash)
+    if not (args.path): #or args.hash):
         optParser.print_help()
         return 0
     elif args.path:
         for i in range(0, len(args.path)):
-            query_virustotal(args.path[i])
-    elif args.hash:
-        hybrid_sandbox(args.hash)
+            sysinternal_vt(args.path[i])
+    # elif args.hash:
+    #     # print(type(args.hash[0]))
+    #     hybrid_sandbox(args.hash)
+    else:
+        pass
 
 
 if __name__ == "__main__":

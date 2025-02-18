@@ -131,7 +131,7 @@ def sysinternal_vt(input_source):
     elif os.path.isfile(input_source):
         hash_db = load_hashes_and_paths_from_file(input_source)
     else:
-        print("Invalid input source")
+        print("Invalid input, expected a file_path or folder_path.")
         return
 
     report_db = load_exist_hashes(REPORT_FILE)
