@@ -5,7 +5,7 @@ from apis.sysinternals_vt import sysinternal_vt
 from apis.hybrid_sandbox import hybrid_sandbox
 
 
-__version__ = "1.0"
+__version__ = "1.1.2"
 __description__ = "x-vriuSs: A tool for analyzing the performance of a file system"
 
 
