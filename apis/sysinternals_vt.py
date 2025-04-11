@@ -137,7 +137,7 @@ def sysinternal_vt(input_source):
     report_db = load_exist_hashes(REPORT_FILE)
     new_db = [(hash, path) for hash, path in hash_db if hash not in report_db]
 
-    if new_db:
+    if len(new_db) > 1:
         search_virustotal_batch(new_db)
     else:
         print("No new hashes to query")
