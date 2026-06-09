@@ -1,19 +1,22 @@
 import csv
-import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from apis.sysinternals_vt_http_client import SysinternalsVTClient
+from apis.sysinternals_vt_report_cache import (
+    load_cached_hash_ratios,
+    merge_cumulative_report,
+    partition_existing_report,
+    shard_index_for_hash,
+)
 from utils.md5_hash import (
     hash_file,
     is_probably_hash_list_file,
     iter_directory_hash_records,
     iter_hash_records_from_file,
 )
-
-
 @dataclass(slots=True)
 class BatchQueryConfig:
     report_file: Path
@@ -21,8 +24,6 @@ class BatchQueryConfig:
     batch_size: int = 100
     worker_count: int = 8
     shard_count: int = 32
-
-
 def iter_input_records(input_source):
     resolved_path = Path(input_source).resolve()
     if resolved_path.is_dir():
@@ -37,8 +38,6 @@ def iter_input_records(input_source):
         return
 
     yield hash_file(str(resolved_path)), str(resolved_path)
-
-
 def partition_input_records(input_sources, shard_dir, shard_count):
     shard_dir.mkdir(parents=True, exist_ok=True)
     handles = {}
@@ -49,7 +48,7 @@ def partition_input_records(input_sources, shard_dir, shard_count):
     try:
         for input_source in input_sources:
             for hash_value, record_path in iter_input_records(input_source):
-                shard_index = int(hashlib.md5(hash_value.encode("utf-8")).hexdigest(), 16) % shard_count
+                shard_index = shard_index_for_hash(hash_value, shard_count)
                 if shard_index not in handles:
                     shard_path = shard_dir / f"input-shard-{shard_index:04d}.csv"
                     handles[shard_index] = shard_path.open("a", newline="", encoding="utf-8")
@@ -68,14 +67,13 @@ def partition_input_records(input_sources, shard_dir, shard_count):
         if count > 0
     ]
     return shard_paths, total_records
-
-
-def process_shard(shard_path, output_path, batch_size, client_factory):
+def process_shard(shard_path, output_path, batch_size, client_factory, existing_shard_path=None):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    cache = {}
+    cache = load_cached_hash_ratios(existing_shard_path)
     pending_records = {}
     written_rows = 0
     queried_hashes = 0
+    reused_hashes = 0
     client = client_factory()
 
     def flush_pending(writer):
@@ -105,6 +103,7 @@ def process_shard(shard_path, output_path, batch_size, client_factory):
 
         for hash_value, record_path in reader:
             if hash_value in cache:
+                reused_hashes += 1
                 writer.writerow([cache[hash_value], hash_value, record_path])
                 written_rows += 1
                 continue
@@ -119,42 +118,40 @@ def process_shard(shard_path, output_path, batch_size, client_factory):
         "shard": shard_path.name,
         "rows": written_rows,
         "queried_hashes": queried_hashes,
+        "reused_hashes": reused_hashes,
         "output_path": str(output_path),
     }
-
-
-def process_shards(shard_paths, report_parts_dir, config, client_factory=SysinternalsVTClient):
+def process_shards(
+    shard_paths,
+    report_parts_dir,
+    config,
+    existing_report_shards=None,
+    client_factory=SysinternalsVTClient,
+):
     report_parts_dir.mkdir(parents=True, exist_ok=True)
     summaries = []
+    existing_report_shards = existing_report_shards or {}
 
     with ThreadPoolExecutor(max_workers=config.worker_count) as executor:
         future_map = {}
         for shard_path in shard_paths:
+            shard_index = int(shard_path.stem.rsplit("-", 1)[-1])
             shard_suffix = shard_path.stem.replace("input-", "")
             output_path = report_parts_dir / f"report-{shard_suffix}.csv"
-            future = executor.submit(process_shard, shard_path, output_path, config.batch_size, client_factory)
+            future = executor.submit(
+                process_shard,
+                shard_path,
+                output_path,
+                config.batch_size,
+                client_factory,
+                existing_report_shards.get(shard_index),
+            )
             future_map[future] = shard_path
 
         for future in as_completed(future_map):
             summaries.append(future.result())
 
     return sorted(summaries, key=lambda item: item["shard"])
-
-
-def merge_shard_reports(report_parts_dir, report_file):
-    report_file.parent.mkdir(parents=True, exist_ok=True)
-    with report_file.open("w", newline="", encoding="utf-8") as output_handle:
-        writer = csv.writer(output_handle)
-        writer.writerow(["ratio", "hash", "path/to/file"])
-
-        for part_path in sorted(report_parts_dir.glob("report-shard-*.csv")):
-            with part_path.open("r", newline="", encoding="utf-8") as input_handle:
-                reader = csv.reader(input_handle)
-                next(reader, None)
-                for row in reader:
-                    writer.writerow(row)
-
-
 def build_run_directory(work_root, input_sources):
     seed_names = [Path(source).stem for source in input_sources[:3]] or ["query"]
     safe_seed = "-".join(seed_names).replace(" ", "-")
@@ -166,13 +163,24 @@ def run_batch_query(input_sources, config, client_factory=SysinternalsVTClient):
     run_dir = build_run_directory(config.work_root, input_sources)
     shard_dir = run_dir / "input-shards"
     report_parts_dir = run_dir / "report-shards"
+    existing_report_shards = partition_existing_report(
+        config.report_file,
+        run_dir / "existing-report-shards",
+        config.shard_count,
+    )
 
     shard_paths, total_records = partition_input_records(input_sources, shard_dir, config.shard_count)
     if total_records == 0:
         return None
 
-    summaries = process_shards(shard_paths, report_parts_dir, config, client_factory=client_factory)
-    merge_shard_reports(report_parts_dir, config.report_file)
+    summaries = process_shards(
+        shard_paths,
+        report_parts_dir,
+        config,
+        existing_report_shards=existing_report_shards,
+        client_factory=client_factory,
+    )
+    merge_cumulative_report(report_parts_dir, config.report_file, existing_report_shards)
 
     return {
         "run_dir": str(run_dir),
@@ -181,4 +189,5 @@ def run_batch_query(input_sources, config, client_factory=SysinternalsVTClient):
         "total_shards": len(shard_paths),
         "total_rows": sum(item["rows"] for item in summaries),
         "queried_hashes": sum(item["queried_hashes"] for item in summaries),
+        "reused_hashes": sum(item["reused_hashes"] for item in summaries),
     }

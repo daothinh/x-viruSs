@@ -158,6 +158,42 @@ class SysinternalsVTPipelineTests(unittest.TestCase):
             },
         )
 
+    def test_existing_report_is_used_as_automatic_resume_cache(self):
+        report_file = self.root / "report.csv"
+        report_file.write_text(
+            "ratio,hash,path/to/file\n"
+            "9/76,44d88612fea8a8f36de82e1278abb02f,C:/old/a.exe\n",
+            encoding="utf-8",
+        )
+        hash_list = self.root / "hashes.csv"
+        hash_list.write_text(
+            "hash,path/to/file\n"
+            "44d88612fea8a8f36de82e1278abb02f,C:/new/a.exe\n"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,C:/new/b.exe\n",
+            encoding="utf-8",
+        )
+        config = BatchQueryConfig(
+            report_file=report_file,
+            work_root=self.root / "workdir",
+            batch_size=2,
+            worker_count=2,
+            shard_count=4,
+        )
+
+        summary = run_batch_query([str(hash_list)], config, client_factory=self.build_client)
+
+        with report_file.open("r", newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        self.assertEqual(summary["reused_hashes"], 1)
+        self.assertEqual(summary["queried_hashes"], 1)
+        self.assertEqual(sum(len(batch) for batch in self.server.requested_batches), 1)
+
+        ratio_by_path = {row["path/to/file"]: row["ratio"] for row in rows}
+        self.assertEqual(ratio_by_path["C:/old/a.exe"], "9/76")
+        self.assertEqual(ratio_by_path["C:/new/a.exe"], "9/76")
+        self.assertEqual(ratio_by_path["C:/new/b.exe"], "11/76")
+
 
 if __name__ == "__main__":
     unittest.main()

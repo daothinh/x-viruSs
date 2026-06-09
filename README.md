@@ -44,6 +44,8 @@ Accepts a directory, a single binary file, or a text/CSV hash-list file.
 
 The upgraded `-x` pipeline is designed for very large inputs. It streams the source data, splits records into shard batches, runs multiple concurrent query workers, and merges shard outputs into one final CSV report.
 
+If `data/report_query.csv` already exists, the pipeline now uses it automatically as a local cache. Known hashes are not queried again; their saved ratio is reused and the report stays cumulative.
+
 ```bash
 # Check a single file
 x-virus.py -x path/to/suspicious/file.exe
@@ -63,6 +65,7 @@ Large-scale `-x` notes:
 - `--workers` controls concurrent shard workers.
 - `--shards` controls how many intermediate shard files are created before query workers start.
 - Each shard writes its own partial report, then the tool merges everything into one final CSV with columns `ratio,hash,path/to/file`.
+- Existing hashes in `data/report_query.csv` are skipped automatically on rerun.
 - For multi-million hash lists, prefer a hash-list file input over individual file arguments.
 
 #### Hybrid Analysis (-hybrid)

@@ -63,8 +63,9 @@ def sysinternal_vt(
 
     print(
         "Prepared "
-        f"{summary['total_records']} records, queried {summary['queried_hashes']} unique hashes, "
-        f"merged {summary['total_rows']} rows into {summary['report_file']}"
+        f"{summary['total_records']} records, reused {summary['reused_hashes']} cached rows, "
+        f"queried {summary['queried_hashes']} unique hashes, merged {summary['total_rows']} current rows "
+        f"into {summary['report_file']}"
     )
     print(f"Shard workdir: {summary['run_dir']}")
     return summary
