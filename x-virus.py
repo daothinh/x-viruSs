@@ -26,6 +26,39 @@ def setup_args():
         # default='terms'
     )
 
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="number of concurrent workers for the VirusTotal -x pipeline",
+    )
+
+    parser.add_argument(
+        "--shards",
+        type=int,
+        default=None,
+        help="number of intermediate shard files for the VirusTotal -x pipeline",
+    )
+
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="number of unique hashes per VirusTotal request, max 100",
+    )
+
+    parser.add_argument(
+        "--report-file",
+        default=None,
+        help="write the merged VirusTotal report to this CSV file",
+    )
+
+    parser.add_argument(
+        "--work-dir",
+        default=None,
+        help="directory used to store temporary batch shards for the VirusTotal -x pipeline",
+    )
+
     # parser.add_argument(
     #     "-pecheck",
     #     action="store",
@@ -64,8 +97,14 @@ def main():
         optParser.print_help()
         return 0
     elif args.path:
-        for i in range(0, len(args.path)):
-            sysinternal_vt(args.path[i])
+        sysinternal_vt(
+            args.path,
+            report_file=args.report_file,
+            work_dir=args.work_dir,
+            batch_size=args.batch_size,
+            worker_count=args.workers,
+            shard_count=args.shards,
+        )
     # elif args.hash:
     #     # print(type(args.hash[0]))
     #     hybrid_sandbox(args.hash)

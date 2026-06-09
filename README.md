@@ -40,14 +40,30 @@ x-vriuSs is a powerful tool for analyzing file systems and detecting malware usi
 ### Detailed Documentation
 
 #### VirusTotal Check (-x)
-Accepts either a file path or directory path:
+Accepts a directory, a single binary file, or a text/CSV hash-list file.
+
+The upgraded `-x` pipeline is designed for very large inputs. It streams the source data, splits records into shard batches, runs multiple concurrent query workers, and merges shard outputs into one final CSV report.
+
 ```bash
 # Check a single file
 x-virus.py -x path/to/suspicious/file.exe
 
 # Check all files in a directory
 x-virus.py -x path/to/suspicious/directory/
+
+# Query a large CSV or TXT hash list with tuned concurrency
+x-virus.py -x path/to/hash-list.csv --workers 12 --shards 96 --batch-size 100
+
+# Write the merged report and shard work files to custom paths
+x-virus.py -x path/to/hash-list.csv --report-file data/report_query.csv --work-dir data/vt_query_runs
 ```
+
+Large-scale `-x` notes:
+- `--batch-size` controls how many unique hashes are sent per VirusTotal request. The safe max is `100`.
+- `--workers` controls concurrent shard workers.
+- `--shards` controls how many intermediate shard files are created before query workers start.
+- Each shard writes its own partial report, then the tool merges everything into one final CSV with columns `ratio,hash,path/to/file`.
+- For multi-million hash lists, prefer a hash-list file input over individual file arguments.
 
 #### Hybrid Analysis (-hybrid)
 Accepts one or multiple hash values, or a path to a CSV file containing hashes:
@@ -63,7 +79,7 @@ x-virus.py -hybrid path/to/hash_list.csv
 ```
 
 #### PE File Analysis (-pecheck)
-Coming soon - 
+Coming soon -
 
 #### VRShare Integration (-vrshare)
-Coming soon - 
+Coming soon -
