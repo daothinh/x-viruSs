@@ -1,7 +1,10 @@
 import csv
+import hashlib
+import json
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from apis.sysinternals_vt_report_cache import (
@@ -84,8 +87,38 @@ def partition_input_records(input_sources, shard_dir, shard_count):
     return shard_paths, total_records
 
 
-def process_shard(shard_path, output_path, batch_size, client_factory, existing_shard_path):
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+def shard_index_from_path(shard_path):
+    return int(shard_path.stem.rsplit("-", 1)[-1])
+
+
+def shard_output_paths(report_parts_dir, shard_index):
+    base_name = f"report-shard-{shard_index:04d}"
+    final_path = report_parts_dir / f"{base_name}.csv"
+    temp_path = report_parts_dir / f"{base_name}.tmp"
+    meta_path = report_parts_dir / f"{base_name}.json"
+    return final_path, temp_path, meta_path
+
+
+def load_completed_shard_summaries(report_parts_dir):
+    completed = {}
+    for meta_path in sorted(report_parts_dir.glob("report-shard-*.json")):
+        try:
+            summary = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        shard_name = summary.get("shard")
+        output_path = Path(summary.get("output_path", ""))
+        if not shard_name or not output_path.exists():
+            continue
+        completed[shard_name] = summary
+    return completed
+
+
+def process_shard(shard_path, report_parts_dir, batch_size, client_factory, existing_shard_path):
+    report_parts_dir.mkdir(parents=True, exist_ok=True)
+    shard_index = shard_index_from_path(shard_path)
+    output_path, temp_output_path, meta_path = shard_output_paths(report_parts_dir, shard_index)
     cached_ratios = load_cached_hash_ratios(existing_shard_path)
     seen_rows = load_existing_row_keys(existing_shard_path)
     pending_records = {}
@@ -119,7 +152,10 @@ def process_shard(shard_path, output_path, batch_size, client_factory, existing_
         pending_records.clear()
 
     try:
-        with shard_path.open("r", newline="", encoding="utf-8") as input_handle, output_path.open(
+        if temp_output_path.exists():
+            temp_output_path.unlink()
+
+        with shard_path.open("r", newline="", encoding="utf-8") as input_handle, temp_output_path.open(
             "w", newline="", encoding="utf-8"
         ) as output_handle:
             reader = csv.reader(input_handle)
@@ -144,11 +180,15 @@ def process_shard(shard_path, output_path, batch_size, client_factory, existing_
                     flush_pending(writer)
 
             flush_pending(writer)
+
+        os.replace(temp_output_path, output_path)
     finally:
+        if temp_output_path.exists():
+            temp_output_path.unlink()
         if hasattr(client, "close"):
             client.close()
 
-    return {
+    summary = {
         "shard": shard_path.name,
         "rows": written_rows,
         "queried_hashes": queried_hashes,
@@ -157,23 +197,35 @@ def process_shard(shard_path, output_path, batch_size, client_factory, existing_
         "failed_hashes": failed_hashes,
         "output_path": str(output_path),
     }
+    if failed_hashes == 0:
+        meta_path.write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
+    elif meta_path.exists():
+        meta_path.unlink()
+    return summary
 
 
 def process_shards(shard_paths, report_parts_dir, config, existing_report_shards=None, client_factory=None):
     report_parts_dir.mkdir(parents=True, exist_ok=True)
     summaries = []
     existing_report_shards = existing_report_shards or {}
+    completed_summaries = load_completed_shard_summaries(report_parts_dir)
+    pending_shard_paths = []
+
+    for shard_path in shard_paths:
+        shard_name = shard_path.name
+        if shard_name in completed_summaries:
+            summaries.append(completed_summaries[shard_name])
+        else:
+            pending_shard_paths.append(shard_path)
 
     with ThreadPoolExecutor(max_workers=config.worker_count) as executor:
         future_map = {}
-        for shard_path in shard_paths:
-            shard_index = int(shard_path.stem.rsplit("-", 1)[-1])
-            shard_suffix = shard_path.stem.replace("input-", "")
-            output_path = report_parts_dir / f"report-{shard_suffix}.csv"
+        for shard_path in pending_shard_paths:
+            shard_index = shard_index_from_path(shard_path)
             future = executor.submit(
                 process_shard,
                 shard_path,
-                output_path,
+                report_parts_dir,
                 config.batch_size,
                 client_factory,
                 existing_report_shards.get(shard_index),
@@ -186,11 +238,22 @@ def process_shards(shard_paths, report_parts_dir, config, existing_report_shards
     return sorted(summaries, key=lambda item: item["shard"])
 
 
+def _source_signature(source):
+    resolved_path = Path(source).resolve()
+    try:
+        stat = resolved_path.stat()
+        stat_bits = f"{stat.st_size}:{stat.st_mtime_ns}"
+    except OSError:
+        stat_bits = "missing"
+    return f"{resolved_path}:{stat_bits}"
+
+
 def build_run_directory(work_root, input_sources):
     seed_names = [Path(source).stem for source in input_sources[:3]] or ["query"]
     safe_seed = "-".join(seed_names).replace(" ", "-")
-    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
-    return work_root / f"{timestamp}-{safe_seed}"
+    fingerprint_payload = "|".join(_source_signature(source) for source in input_sources)
+    digest = hashlib.sha1(fingerprint_payload.encode("utf-8")).hexdigest()[:12]
+    return work_root / f"resume-{safe_seed}-{digest}"
 
 
 def run_batch_query(input_sources, config, client_factory):

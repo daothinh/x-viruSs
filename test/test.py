@@ -202,6 +202,61 @@ class SysinternalsVTPipelineTests(unittest.TestCase):
         self.assertEqual(ratio_by_path["C:/new/a.exe"], "9/76")
         self.assertEqual(ratio_by_path["C:/new/b.exe"], "11/76")
 
+    def test_completed_shards_from_interrupted_run_are_reused_on_rerun(self):
+        hash_list = self.root / "hashes.csv"
+        hash_list.write_text(
+            "hash,path/to/file\n"
+            "44d88612fea8a8f36de82e1278abb02f,C:/samples/a.exe\n"
+            "44d88612fea8a8f36de82e1278abb02f,C:/samples/b.exe\n"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,C:/samples/c.exe\n",
+            encoding="utf-8",
+        )
+        report_file = self.root / "report.csv"
+        work_root = self.root / "workdir"
+        config = BatchQueryConfig(
+            report_file=report_file,
+            work_root=work_root,
+            batch_size=1,
+            worker_count=2,
+            shard_count=2,
+        )
+
+        failed_once = {"done": False}
+
+        def flaky_client_factory():
+            client = self.build_client()
+            original_query = client.query_hashes
+
+            def flaky_query(hash_values):
+                if not failed_once["done"] and hash_values == ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]:
+                    failed_once["done"] = True
+                    raise RuntimeError("simulated network drop")
+                return original_query(hash_values)
+
+            client.query_hashes = flaky_query
+            return client
+
+        first_summary = run_batch_query([str(hash_list)], config, client_factory=flaky_client_factory)
+        self.assertEqual(first_summary["queried_hashes"], 1)
+        self.assertEqual(first_summary["failed_hashes"], 1)
+        self.assertEqual(sum(len(batch) for batch in self.server.requested_batches), 1)
+
+        self.server.requested_batches.clear()
+        second_summary = run_batch_query([str(hash_list)], config, client_factory=self.build_client)
+
+        self.assertEqual(second_summary["queried_hashes"], 1)
+        self.assertEqual(second_summary["failed_hashes"], 0)
+        self.assertEqual(sum(len(batch) for batch in self.server.requested_batches), 1)
+
+        with report_file.open("r", newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+
+        self.assertEqual(len(rows), 3)
+        ratio_by_path = {row["path/to/file"]: row["ratio"] for row in rows}
+        self.assertEqual(ratio_by_path["C:/samples/a.exe"], "5/76")
+        self.assertEqual(ratio_by_path["C:/samples/b.exe"], "5/76")
+        self.assertEqual(ratio_by_path["C:/samples/c.exe"], "11/76")
+
 
 if __name__ == "__main__":
     unittest.main()
