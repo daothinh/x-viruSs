@@ -1,40 +1,125 @@
-import os
 import csv
 import hashlib
+import os
+import re
+import string
+
 
 HASH_CHUNK_SIZE = 1024 * 1024
+HEX_DIGITS = set(string.hexdigits.lower())
+HASH_PATTERN = re.compile(r"(?i)([a-f0-9]{64}|[a-f0-9]{40}|[a-f0-9]{32})")
+HEADER_TOKENS = {
+    "hash",
+    "md5",
+    "sha1",
+    "sha256",
+    "file",
+    "path",
+    "path/to/file",
+    "filepath",
+    "file_path",
+    "ratio",
+    "detection_ratio",
+}
 
 
-def hash_file(file_path):
+def normalize_hash(value):
+    candidate = value.strip().lower()
+    if len(candidate) not in {32, 40, 64}:
+        return None
+    if not set(candidate) <= HEX_DIGITS:
+        return None
+    return candidate
+
+
+def hash_file(file_path, chunk_size=HASH_CHUNK_SIZE):
+    md5_hash = hashlib.md5()
+    with open(file_path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            md5_hash.update(chunk)
+    return md5_hash.hexdigest()
+
+
+def iter_directory_hash_records(folder_path):
+    for root, _dirs, files in os.walk(folder_path):
+        for file_name in files:
+            current_path = os.path.join(root, file_name)
+            try:
+                yield hash_file(current_path), current_path
+            except OSError as exc:
+                print(f"Skip unreadable file {current_path}: {exc}")
+
+
+def _extract_hash_record(fields, default_path):
+    cleaned_fields = [field.strip() for field in fields if field and field.strip()]
+    for index, field in enumerate(cleaned_fields):
+        match = HASH_PATTERN.search(field)
+        if not match:
+            continue
+
+        hash_value = normalize_hash(match.group(0))
+        if not hash_value:
+            continue
+
+        path_value = default_path
+        for candidate in cleaned_fields[index + 1 :]:
+            if normalize_hash(candidate):
+                continue
+            path_value = candidate
+            break
+        return hash_value, path_value
+    return None
+
+
+def _is_header_row(fields):
+    normalized_fields = [field.strip().lower() for field in fields if field and field.strip()]
+    return bool(normalized_fields) and all(field in HEADER_TOKENS for field in normalized_fields)
+
+
+def iter_hash_records_from_file(file_path):
+    with open(file_path, "r", encoding="utf-8", errors="ignore", newline="") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            csv_fields = next(csv.reader([line]))
+            if _is_header_row(csv_fields):
+                continue
+
+            record = _extract_hash_record(csv_fields, "unknown")
+            if record is None and len(csv_fields) == 1:
+                record = _extract_hash_record(line.split(), "unknown")
+            if record is not None:
+                yield record
+
+
+def is_probably_hash_list_file(file_path, sample_limit=10):
+    inspected = 0
+    matched = 0
     try:
-        # Check file size before processing
-        file_size = os.path.getsize(file_path)
-        if file_size > 512 * 1024 * 1024:  # 512 MB in bytes
-            return file_path, "File too large"
+        with open(file_path, "r", encoding="utf-8", errors="ignore", newline="") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
 
-        with open(file_path, "rb") as f:
-            md5_hash = hashlib.md5()
-            for chunk in iter(lambda: f.read(HASH_CHUNK_SIZE), b""):
-                md5_hash.update(chunk)
-            return file_path, md5_hash.hexdigest()
-    except FileNotFoundError:
-        return file_path, "File not found"
-    except PermissionError:
-        return file_path, "Permission denied"
-    except IsADirectoryError:
-        return file_path, "Is a directory"
-    except OSError as e:
-        return file_path, f"OS error: {e}"
-    except Exception as e:
-        return file_path, f"Unexpected error: {e}"
+                csv_fields = next(csv.reader([line]))
+                if _is_header_row(csv_fields):
+                    continue
+
+                inspected += 1
+                if _extract_hash_record(csv_fields, "unknown") is not None:
+                    matched += 1
+                if inspected >= sample_limit:
+                    break
+    except OSError:
+        return False
+    return inspected > 0 and inspected == matched
 
 
 def iter_hashes_in_folder(folder_path):
-    for root, dirs, files in os.walk(folder_path):
-        for file in files:
-            file_path = os.path.join(root, file)
-            hash_value = hash_file(file_path)[1]
-            yield hash_value, file_path
+    yield from iter_directory_hash_records(folder_path)
 
 def hash_files_in_folder(folder_path, output_file=None):
     try:
@@ -70,23 +155,8 @@ def hash_files_in_folder(folder_path, output_file=None):
 
 
 def iter_hashes_and_paths_from_file(file_path):
-    with open(file_path, "r", newline="", encoding="utf-8-sig") as file:
-        reader = csv.reader(file)
-        for row in reader:
-            if not row:
-                continue
+    yield from iter_hash_records_from_file(file_path)
 
-            if len(row) == 2:
-                hash_value = row[0].strip()
-                file_path_value = row[1].strip() or "unknown"
-            elif len(row) == 1:
-                hash_value = row[0].strip()
-                file_path_value = "unknown"
-            else:
-                continue
-
-            if hash_value:
-                yield hash_value, file_path_value
 
 def load_hashes_and_paths_from_file(file_path):
     try:

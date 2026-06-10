@@ -32,6 +32,7 @@ x-vriuSs is a powerful tool for analyzing file systems and detecting malware usi
 | Option | Description | Example |
 |--------|-------------|---------|
 | `-x PATH [PATH ...]` | Check detection ratio of files or directories on VirusTotal | `x-virus.py -x suspicious.exe` |
+| `-worker N` | Set number of worker threads for Sysinternals VT batch query | `x-virus.py -x hashes.csv -worker 8` |
 | `-pecheck FILE` | Show file version, timestamp, and digital signature details | `x-virus.py -pecheck program.exe` |
 | `-hybrid HASH [HASH ...]` | Download sample malicious files from Hybrid Analysis | `x-virus.py -hybrid 44d88612fea8a8f36de82e1278abb02f` |
 | `-v, --version` | Show program's version number and exit | `x-virus.py -v` |
@@ -47,6 +48,9 @@ x-virus.py -x path/to/suspicious/file.exe
 
 # Check all files in a directory
 x-virus.py -x path/to/suspicious/directory/
+
+# Query a large hash list with 8 worker threads
+x-virus.py -x path/to/hash_list.csv -worker 8
 ```
 
 #### Hybrid Analysis (-hybrid)
